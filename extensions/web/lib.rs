@@ -246,23 +246,34 @@ fn op_encoding_encode_into(
   input: String,
   mut buffer: ZeroCopyBuf,
 ) -> Result<EncodeIntoResult, AnyError> {
-  let dst: &mut [u8] = &mut buffer;
-  let mut read = 0;
-  let mut written = 0;
-  for char in input.chars() {
-    let len = char.len_utf8();
-    if dst.len() < written + len {
-      break;
+  // Find the last code point boundary in `input` that fits in `buffer`, and
+  // copy the contents of `input` up to that point.
+
+  let to_write = {
+    let mut boundary = input.len().min(buffer.len());
+
+    // The maximum distance between two consecutive UTF-8 code point boundaries
+    // is 4 bytes.
+    for _ in 0..4 {
+      if input.is_char_boundary(boundary) {
+        break;
+      }
+      boundary -= 1;
     }
-    char.encode_utf8(&mut dst[written..]);
-    written += len;
-    if char > '\u{FFFF}' {
-      read += 2
-    } else {
-      read += 1
-    };
-  }
-  Ok(EncodeIntoResult { read, written })
+    assert!(input.is_char_boundary(boundary));
+
+    boundary
+  };
+
+  buffer[..to_write].copy_from_slice(input[..to_write].as_bytes());
+
+  // The `read` output parameter is measured in UTF-16 code units.
+  let read = input[..to_write].encode_utf16().count();
+
+  Ok(EncodeIntoResult {
+    read,
+    written: to_write,
+  })
 }
 
 pub fn get_declaration() -> PathBuf {
