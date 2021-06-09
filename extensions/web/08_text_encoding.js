@@ -141,7 +141,7 @@
     encode(input = "") {
       webidl.assertBranded(this, TextEncoder);
       const prefix = "Failed to execute 'encode' on 'TextEncoder'";
-      input = webidl.converters.USVString(input, {
+      input = webidl.converters.DOMString(input, {
         prefix,
         context: "Argument 1",
       });
@@ -156,7 +156,7 @@
     encodeInto(source, destination) {
       webidl.assertBranded(this, TextEncoder);
       const prefix = "Failed to execute 'encodeInto' on 'TextEncoder'";
-      source = webidl.converters.USVString(source, {
+      source = webidl.converters.DOMString(source, {
         prefix,
         context: "Argument 1",
       });
