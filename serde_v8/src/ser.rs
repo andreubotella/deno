@@ -4,6 +4,7 @@ use serde::ser;
 use serde::ser::Serialize;
 
 use std::cell::RefCell;
+use std::ptr::NonNull;
 
 use crate::error::{Error, Result};
 use crate::keys::v8_struct_key;
@@ -269,10 +270,66 @@ impl<'a, 'b, 'c> ser::SerializeStruct for MagicBufferSerializer<'a, 'b, 'c> {
   }
 }
 
+pub struct MagicU16StringSerializer<'a, 'b, 'c> {
+  scope: ScopePtr<'a, 'b, 'c>,
+  ptr: Option<NonNull<u16>>,
+  len: Option<usize>,
+}
+
+impl<'a, 'b, 'c> MagicU16StringSerializer<'a, 'b, 'c> {
+  pub fn new(scope: ScopePtr<'a, 'b, 'c>) -> Self {
+    Self {
+      scope,
+      ptr: None,
+      len: None,
+    }
+  }
+}
+
+impl<'a, 'b, 'c> ser::SerializeStruct for MagicU16StringSerializer<'a, 'b, 'c> {
+  type Ok = JsValue<'a>;
+  type Error = Error;
+
+  fn serialize_field<T: ?Sized + Serialize>(
+    &mut self,
+    key: &'static str,
+    value: &T,
+  ) -> Result<()>
+  where
+    T: Serialize,
+  {
+    use std::convert::TryInto;
+    let transmuted: usize = value
+      .serialize(magic::FieldSerializer {})?
+      .try_into()
+      .unwrap();
+    match key {
+      magic::u16string::FIELD_PTR => {
+        self.ptr = NonNull::new(transmuted as *mut u16)
+      }
+      magic::u16string::FIELD_LEN => self.len = Some(transmuted),
+      _ => unreachable!(),
+    }
+    Ok(())
+  }
+
+  fn end(self) -> JsResult<'a> {
+    let slice = unsafe {
+      std::slice::from_raw_parts(self.ptr.unwrap().as_ptr(), self.len.unwrap())
+    };
+    let scope = &mut *self.scope.borrow_mut();
+
+    v8::String::new_from_two_byte(scope, slice, v8::NewStringType::Normal)
+      .map(|v| v.into())
+      .ok_or(Error::ExpectedString)
+  }
+}
+
 // Dispatches between magic and regular struct serializers
 pub enum StructSerializers<'a, 'b, 'c> {
   Magic(MagicSerializer<'a>),
   MagicBuffer(MagicBufferSerializer<'a, 'b, 'c>),
+  MagicU16String(MagicU16StringSerializer<'a, 'b, 'c>),
   Regular(ObjectSerializer<'a, 'b, 'c>),
 }
 
@@ -288,6 +345,7 @@ impl<'a, 'b, 'c> ser::SerializeStruct for StructSerializers<'a, 'b, 'c> {
     match self {
       StructSerializers::Magic(s) => s.serialize_field(key, value),
       StructSerializers::MagicBuffer(s) => s.serialize_field(key, value),
+      StructSerializers::MagicU16String(s) => s.serialize_field(key, value),
       StructSerializers::Regular(s) => s.serialize_field(key, value),
     }
   }
@@ -296,6 +354,7 @@ impl<'a, 'b, 'c> ser::SerializeStruct for StructSerializers<'a, 'b, 'c> {
     match self {
       StructSerializers::Magic(s) => s.end(),
       StructSerializers::MagicBuffer(s) => s.end(),
+      StructSerializers::MagicU16String(s) => s.end(),
       StructSerializers::Regular(s) => s.end(),
     }
   }
@@ -519,6 +578,10 @@ impl<'a, 'b, 'c> ser::Serializer for Serializer<'a, 'b, 'c> {
       magic::buffer::BUF_NAME => {
         let m = MagicBufferSerializer::new(self.scope);
         Ok(StructSerializers::MagicBuffer(m))
+      }
+      magic::u16string::NAME => {
+        let m = MagicU16StringSerializer::new(self.scope);
+        Ok(StructSerializers::MagicU16String(m))
       }
       _ => {
         let o = ObjectSerializer::new(self.scope);

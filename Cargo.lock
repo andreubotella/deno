@@ -2745,8 +2745,7 @@ dependencies = [
 [[package]]
 name = "rusty_v8"
 version = "0.22.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa03778bb7866d8320fc3dd5e6be52929dc10f729ae5e61ea2fbce385a4595d2"
+source = "git+https://github.com/andreubotella/rusty_v8?branch=two-byte-strings#40fbaeb9947850a129c73b37adf63943932c56ba"
 dependencies = [
  "bitflags",
  "fslock",
