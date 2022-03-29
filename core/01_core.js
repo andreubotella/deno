@@ -9,18 +9,25 @@
     SyntaxError,
     TypeError,
     URIError,
+    Map,
     ArrayPrototypeMap,
     ErrorCaptureStackTrace,
     ObjectEntries,
-    ObjectFreeze,
     ObjectFromEntries,
+    MapPrototypeDelete,
+    MapPrototypeSet,
+    PromisePrototypeCatch,
+    PromisePrototypeFinally,
+    StringPrototypeSlice,
     ObjectAssign,
+    SymbolFor,
   } = window.__bootstrap.primordials;
+  const ops = window.Deno.core.ops;
+  const opIds = Object.keys(ops).reduce((a, v, i) => {
+    a[v] = i;
+    return a;
+  }, {});
 
-  // Available on start due to bindings.
-  const { opcallSync, opcallAsync } = window.Deno.core;
-
-  let opsCache = {};
   const errorMap = {};
   // Builtin v8 / JS errors
   registerErrorClass("Error", Error);
@@ -30,13 +37,19 @@
   registerErrorClass("TypeError", TypeError);
   registerErrorClass("URIError", URIError);
 
-  function ops() {
-    return opsCache;
+  // TODO(bartlomieju): it future use `v8::Private` so it's not visible
+  // to users. Currently missing bindings.
+  const promiseIdSymbol = SymbolFor("Deno.core.internalPromiseId");
+
+  let opCallTracingEnabled = false;
+  const opCallTraces = new Map();
+
+  function enableOpCallTracing() {
+    opCallTracingEnabled = true;
   }
 
-  function syncOpsCache() {
-    // op id 0 is a special value to retrieve the map of registered ops.
-    opsCache = ObjectFreeze(ObjectFromEntries(opcallSync(0)));
+  function isOpCallTracingEnabled() {
+    return opCallTracingEnabled;
   }
 
   function registerErrorClass(className, errorClass) {
@@ -69,14 +82,26 @@
     return res;
   }
 
-  function opAsync(opName, arg1 = null, arg2 = null) {
-    // return unwrapOpResult(opcallAsync(opsCache[opName], arg1, arg2));
-    const promiseOrErr = opcallAsync(opsCache[opName], arg1, arg2);
-    return unwrapOpResult(promiseOrErr).catch(unwrapOpResult);
+  function opAsync(opName, ...args) {
+    let [p, promiseId] = ops[opName](opIds[opName], ...args);
+    p = PromisePrototypeCatch(ret, unwrapOpResult);
+    if (opCallTracingEnabled) {
+      // Capture a stack trace by creating a new `Error` object. We remove the
+      // first 6 characters (the `Error\n` prefix) to get just the stack trace.
+      const stack = StringPrototypeSlice(new Error().stack, 6);
+      MapPrototypeSet(opCallTraces, promiseId, { opName, stack });
+      p = PromisePrototypeFinally(
+        p,
+        () => MapPrototypeDelete(opCallTraces, promiseId),
+      );
+    }
+    // Save the id on the promise so it can later be ref'ed or unref'ed
+    p[promiseIdSymbol] = promiseId;
+    return p;
   }
 
-  function opSync(opName, arg1 = null, arg2 = null) {
-    return unwrapOpResult(opcallSync(opsCache[opName], arg1, arg2));
+  function opSync(opName, ...args) {
+    return unwrapOpResult(ops[opName](opIds[opName], ...args));
   }
 
   function resources() {
@@ -110,7 +135,7 @@
   function metrics() {
     const [aggregate, perOps] = opSync("op_metrics");
     aggregate.ops = ObjectFromEntries(ArrayPrototypeMap(
-      ObjectEntries(opsCache),
+      ObjectEntries(opIds),
       ([opName, opId]) => [opName, perOps[opId]],
     ));
     return aggregate;
@@ -139,7 +164,6 @@
   const core = ObjectAssign(globalThis.Deno.core, {
     opAsync,
     opSync,
-    ops,
     close,
     tryClose,
     read,
@@ -150,11 +174,13 @@
     metrics,
     registerErrorBuilder,
     registerErrorClass,
-    syncOpsCache,
     BadResource,
     BadResourcePrototype,
     Interrupted,
     InterruptedPrototype,
+    enableOpCallTracing,
+    isOpCallTracingEnabled,
+    opCallTraces,
   });
 
   ObjectAssign(globalThis.__bootstrap, { core });

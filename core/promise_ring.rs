@@ -31,7 +31,16 @@ impl PromiseRing {
   // }
 
   pub(crate) fn has(&self, id: PromiseId) -> bool {
-    self.ring.get(Self::ring_idx(id)).is_some() || self.map.contains_key(&id)
+    let ring_start = if self.cursor < (RING_SIZE as u32) {
+      0
+    } else {
+      self.cursor - RING_SIZE as u32
+    };
+    if id >= ring_start {
+      self.ring[Self::ring_idx(id)].is_some()
+    } else {
+      self.map.contains_key(&id)
+    }
   }
 
   pub(crate) fn take(&mut self, id: PromiseId) -> Option<PromiseResolver> {
